@@ -59,24 +59,31 @@
 
 ### `search_listings`
 
-- **What it does:**
-- **Inputs:** <!-- name and type each: `max_price` (float), not "a price" -->
-- **Returns:**
-- **When it has nothing:**
+- **What it does:** Keyword search over the 40 listings in `data/listings.json`, with an optional size filter and an optional price ceiling, ranked best match first. No model call.
+- **Inputs:** `description` (str): the words to match, e.g. `"vintage graphic tee"`. `size` (str or None): a size to filter on, e.g. `"M"`, `"US 8"`, `"W30"`; `None` skips the size filter. `max_price` (float or None): the highest price allowed, inclusive; `None` skips the price filter.
+- **Returns:** A list of listing dicts, each the unmodified record from the data file with the fields `id`, `title`, `description`, `category`, `style_tags` (list of str), `size`, `condition`, `price` (float), `colors` (list of str), `brand` (str or None), `platform`. Ordered by match score, highest first, ties broken by lower price. At most `config.SEARCH_RESULT_LIMIT` (10) items.
+- **When it has nothing:** An empty list, `[]`. Never `None`, never an exception. Also `[]` when the description has no usable keywords (only stop words or numbers), when the price ceiling removes every listing, or when no listing's size matches.
+
+Matching rules, so someone else could build it:
+
+- *Price:* keep a listing when `price <= max_price`.
+- *Size:* the listing's size string is split on `/`, spaces and parentheses into tokens, uppercased: `S/M` gives `S` and `M`; `US 8.5` gives `US` and `8.5`; `W30 L30` gives `W30` and `L30`; `XL (fits oversized)` gives `XL`, `FITS`, `OVERSIZED`. The requested size is uppercased, a leading `US ` or `SIZE ` is dropped, and the words small/medium/large/extra large become `S`/`M`/`L`/`XL`. A listing passes when the request equals one of its tokens exactly, or when the listing is marked One Size. It is never a substring test, so `8` does not match `US 8.5` and `S` does not match `US 9`.
+- *Keywords:* the description is lowercased and split into words (`[a-z0-9]+`); stop words (a, an, the, and, or, in, on, with, for, under, over, size, length, of, to, at, by, from, is, are, something, some, me, my, i, want, need, looking) and bare numbers are dropped. A keyword hits a listing when it appears as a whole word, singular or plural (`tee`/`tees`, `sneaker`/`sneakers`), in the listing's title, description, style_tags, category or colors.
+- *Score:* number of keywords that hit, plus one extra point for each keyword found in the title. Listings scoring 0 are dropped.
 
 ### `suggest_outfit`
 
-- **What it does:**
-- **Inputs:**
-- **Returns:**
-- **When it has nothing:**
+- **What it does:** Asks the model for one or two outfits built around the new item, naming pieces the user already owns.
+- **Inputs:** `new_item` (dict): one listing dict as returned by `search_listings`. `wardrobe` (dict): `{"items": [...]}` where each item has `id` (str), `name` (str), `category` (str), `colors` (list of str), `style_tags` (list of str), `notes` (str or None). The list may be empty.
+- **Returns:** A non-empty string of plain text (no markdown headings), holding one or two outfit ideas that each name at least one wardrobe piece by its `name`, about 120 words or fewer.
+- **When it has nothing:** With an empty wardrobe (`items` is `[]` or the key is missing) it still returns a non-empty string: general styling advice for the item built around common basics like jeans, a white tee and sneakers. If the model returns an empty response, it returns the fixed sentence "No outfit suggestion could be generated for <title>; pair it with neutral basics." The result is never `""`.
 
 ### `create_fit_card`
 
-- **What it does:**
-- **Inputs:**
-- **Returns:**
-- **When it has nothing:**
+- **What it does:** Writes a short caption someone would post about the find, matching the vibe of the outfit suggestion.
+- **Inputs:** `outfit` (str): the text returned by `suggest_outfit`. `new_item` (dict): the listing dict for the item.
+- **Returns:** A string of two to four sentences that mentions the item's title, its price written as `$NN`, and its platform once each. No hashtags, no markdown.
+- **When it has nothing:** If `outfit` is empty or only whitespace, it does not call the model. It returns the one-sentence string "No outfit suggestion was available for <title>, so no fit card was written." It never raises.
 
 ---
 
@@ -93,7 +100,7 @@
      The grader checks your code against what you claim here, so the file and
      function have to be real. -->
 
-**Branch rule:**
+**Branch rule:** If `search_listings` returns an empty list, write a message into `session["error"]` that names the keywords, size and price ceiling that were used and what the user could change, and stop: `selected_item`, `outfit_suggestion` and `fit_card` stay `None`, and `suggest_outfit` is never called. Otherwise take the first result as `session["selected_item"]`, call `suggest_outfit` with that item and the wardrobe, then call `create_fit_card` with that outfit and the same item.
 
 **Where it lives:** `agent.py::run_agent`
 
