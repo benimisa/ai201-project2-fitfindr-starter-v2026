@@ -41,6 +41,7 @@
 
 <!-- Three or four sentences: what a user asks for, and what they get back. -->
 
+FitFindr is an AI-powered thrift shopping assistant. A user describes what they're looking for in plain language — something like "vintage graphic tee under $30, size M" — and the agent searches a catalog of 40 secondhand clothing listings, filtering by keywords, size and price. When it finds a match, it picks the best result, asks an AI model to suggest one or two outfits combining that item with pieces the user already owns (or common basics if they haven't saved a wardrobe), and then generates a short social-media-style caption — a "fit card" — that mentions the item, its price and where it was found. If nothing matches the search, it stops early and tells the user exactly what to change.
 
 
 ---
@@ -104,9 +105,9 @@ Matching rules, so someone else could build it:
 
 **Where it lives:** `agent.py::run_agent`
 
-**How the query is parsed:** <!-- regex, string splitting, or asking the model — say which -->
+**How the query is parsed:** Regex — two sets of compiled patterns extract a price ceiling (e.g. "under $30") and a size (e.g. "size M", "XL", "US 8") from the query string, stripping the matched text out. Whatever remains becomes the description keywords. No model call is involved; parsing is deterministic and free.
 
-**What moves through the session:** <!-- which fields, in what order -->
+**What moves through the session:** `query` → `parsed` (description, size, max_price from the regex parser) → `search_results` (list of matching listing dicts) → **branch**: if empty, `error` is set and the loop stops; otherwise → `selected_item` (first result) → `outfit_suggestion` (string from `suggest_outfit`) → `fit_card` (string from `create_fit_card`). Every tool reads its inputs from the session dict and writes its output back into it.
 
 ---
 
@@ -126,19 +127,68 @@ $ python app.py ask '...'
 
 **The three tools, tested one at a time**
 
+Tool 1, `search_listings`. Seven listings score on "graphic tee" at $30 or less; the two with "graphic" or "tee" in the title come first, and nothing over $30 appears:
+
 ```
 $ python -c "from tools import search_listings; print(search_listings('graphic tee', max_price=30))"
-
+[{'id': 'lst_006', 'title': 'Graphic Tee — 2003 Tour Bootleg Style', 'description': 'Vintage-style bootleg tee with faded graphic. Slightly boxy fit. 100% cotton, soft and worn-in.', 'category': 'tops', 'style_tags': ['graphic tee', 'vintage', 'grunge', 'streetwear', 'band tee'], 'size': 'L', 'condition': 'good', 'price': 24.0, 'colors': ['black'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_002', 'title': 'Y2K Baby Tee — Butterfly Print', 'description': 'Super cute early 2000s baby tee with butterfly graphic. Fitted crop length. Tag says medium but fits like a small.', 'category': 'tops', 'style_tags': ['y2k', 'vintage', 'graphic tee', 'cottagecore'], 'size': 'S/M', 'condition': 'excellent', 'price': 18.0, 'colors': ['white', 'pink', 'purple'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_033', 'title': 'Vintage Band Tee — Faded Grey', 'description': 'Faded grey band-style tee with distressed graphic. Crew neck. Fits boxy. Well-loved but no holes or major damage.', 'category': 'tops', 'style_tags': ['vintage', 'grunge', 'band tee', 'graphic tee', 'streetwear'], 'size': 'L', 'condition': 'fair', 'price': 19.0, 'colors': ['grey', 'charcoal'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_017', 'title': 'Mesh Long-Sleeve Top — Black', 'description': 'Sheer black mesh long-sleeve. Great for layering under a graphic tee or over a bralette. Stretchy material, fits true to size.', 'category': 'tops', 'style_tags': ['y2k', 'grunge', 'goth', 'layering'], 'size': 'S/M', 'condition': 'excellent', 'price': 15.0, 'colors': ['black'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_015', 'title': 'Vintage Graphic Hoodie — Faded Black', 'description': 'Faded black pullover hoodie with barely-visible vintage graphic on the chest. Cozy interior. Some pilling but adds to the worn-in look.', 'category': 'tops', 'style_tags': ['vintage', 'grunge', 'graphic', 'streetwear'], 'size': 'L', 'condition': 'fair', 'price': 26.0, 'colors': ['black', 'charcoal'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_012', 'title': 'Oversized Crewneck Sweatshirt — Vintage Navy', 'description': 'Perfectly faded navy crewneck. Genuinely vintage — not manufactured distressed. Ribbed cuffs and hem. No graphics, clean.', 'category': 'tops', 'style_tags': ['vintage', 'basics', 'oversized', 'classic'], 'size': 'XL (fits oversized)', 'condition': 'good', 'price': 20.0, 'colors': ['navy'], 'brand': None, 'platform': 'thredUp'}, {'id': 'lst_011', 'title': 'Low-Rise Cargo Pants — Khaki', 'description': 'Y2K era low-rise cargo pants. Lots of pockets. Khaki color, slightly distressed at the hems. Great for layering with a long tee.', 'category': 'bottoms', 'style_tags': ['y2k', 'cargo', '2000s', 'streetwear'], 'size': 'W29', 'condition': 'fair', 'price': 27.0, 'colors': ['khaki', 'tan'], 'brand': None, 'platform': 'poshmark'}]
 ```
 
-```
-$ python -c "from tools import suggest_outfit; ..."
+The empty case, which the loop branches on. An empty list, not `None`, not an error:
 
 ```
+$ python -c "from tools import search_listings; print(search_listings('designer ballgown', size='XXS', max_price=5))"
+[]
+```
+
+Tool 2, `suggest_outfit`, with the example wardrobe. Every piece it names (white ribbed tank top, chunky white sneakers, black crossbody bag, oversized grey crewneck sweatshirt, black combat boots) is in `data/wardrobe_schema.json`:
 
 ```
-$ python -c "from tools import create_fit_card; ..."
+$ python -c "from tools import suggest_outfit; from utils.data_loader import get_example_wardrobe, load_listings; print(suggest_outfit(load_listings()[0], get_example_wardrobe()))"
+Hey there! Those vintage Levi's 501 jeans are such a classic find and a great price. Here are two easy ways to style them using pieces you already own.
 
+For an effortless daytime look, pair the new jeans with your white ribbed tank top and chunky white sneakers. Add your black crossbody bag to pull it all together. This works because the fitted tank balances the relaxed vintage denim for a timeless, casual vibe.
+
+For a cozier street style look, layer your oversized grey crewneck sweatshirt over the jeans and wear them with your black combat boots. This outfit works because the super-relaxed sweatshirt contrasts nicely with the structured 501s, creating that cool, comfortable grunge aesthetic.
+```
+
+The same tool with an empty wardrobe. It still returns advice, built from basics instead of owned pieces:
+
+```
+$ python -c "from tools import suggest_outfit; from utils.data_loader import get_empty_wardrobe, load_listings; print(suggest_outfit(load_listings()[0], get_empty_wardrobe()))"
+Hey there! Those vintage Levi's are an absolute steal and such a versatile find. Here are two easy ways to style them using pieces you probably already own.
+
+Outfit one pairs the jeans with a crisp white t-shirt, a classic black leather jacket, and black ankle boots. This works because the sharp jacket and boots instantly elevate the casual denim for a cool, effortless city vibe.
+
+Outfit two combines the jeans with an oversized neutral beige hoodie and retro white sneakers. This works because it leans into a cozy streetwear aesthetic, keeping you comfortable while looking totally put-together.
+
+Both looks let those classic jeans take center stage without trying too hard. Let me know which one you like best!
+```
+
+Tool 3, `create_fit_card`. Three sentences, with the title, `$38` and depop each mentioned once:
+
+```
+$ python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('jeans and white sneakers', load_listings()[0]))"
+Scored these Vintage Levi's 501 Jeans — Medium Wash for just $38 on depop and they fit like an absolute dream. I love the lived-in fading at the knees that gives them that effortless, broken-in streetwear vibe. I kept it classic by throwing them on with my favorite crisp white sneakers for running errands today.
+```
+
+Its empty case: a blank outfit gets a sentence back, and the model is never called:
+
+```
+$ python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(repr(create_fit_card('   ', load_listings()[0])))"
+"No outfit suggestion was available for Vintage Levi's 501 Jeans — Medium Wash, so no fit card was written."
+```
+
+The same item three times with the cache off, to check the cards actually vary. Three different openings:
+
+```
+$ python -c "import config; config.CACHE_ENABLED = False; from tools import create_fit_card; from utils.data_loader import load_listings; item = load_listings()[0]; [print(create_fit_card('jeans and white sneakers', item), '\n---') for _ in range(3)]"
+I am still not over scoring these Vintage Levi's 501 Jeans — Medium Wash for just $38 on depop. The lived-in fade at the knees gives them that ultimate effortless streetwear vibe without looking worn out. I paired them with crisp white sneakers and a simple cotton tee for a classic weekend look that feels like pure nostalgia.
+---
+I finally tracked down these Vintage Levi's 501 Jeans — Medium Wash on depop and I am officially obsessed with the lived-in look. They cost me just $38 and fit like an absolute dream for everyday streetwear. I love keeping the rest of the outfit super clean by pairing them with crisp white sneakers.
+---
+Scored these dreamy Vintage Levi's 501 Jeans — Medium Wash on depop for just $38 and I am never taking them off. That lived-in fade at the knees gives them the ultimate effortless streetwear vibe. I kept it classic today by pairing them with my favorite crisp white sneakers for running weekend errands.
+---
 ```
 
 ---
@@ -154,15 +204,15 @@ $ python -c "from tools import create_fit_card; ..."
 
 **Moment 1**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* I gave Claude the `search_listings` spec from the Tool Inventory and asked it to implement the keyword scoring and size-matching logic.
+- *What came back:* The initial version used substring matching for sizes, so `"S"` matched listings with `"US 9"` because "S" appears inside "US". It also returned `None` when no listings matched instead of an empty list.
+- *What I changed:* I switched to token-based size matching (split on `/`, spaces, and parentheses, then compare whole tokens) and made sure the function always returns `[]` on no match, since the agent loop branches on `if not session["search_results"]` and `None` would have worked by accident but violated the spec.
 
 **Moment 2**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* I asked Claude to write the `_no_match_message` function — the message the agent shows when a search comes back empty — and told it the message needed to name what was searched for and suggest what the user could change.
+- *What came back:* The first draft said "No results found. Try a different search." — generic, with nothing actionable. It didn't mention the size, price, or keywords that were used.
+- *What I changed:* I rewrote it to include the parsed description, any size and price constraints, and specific tips like "drop the size", "raise the price ceiling", or "try fewer keywords". It also reports how many total listings exist and the price range, so the user knows the data isn't empty.
 
 <!-- ═══════════════════════ UNIT 4 — THE TEST ═══════════════════════
 
